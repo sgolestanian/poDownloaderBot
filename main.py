@@ -201,9 +201,9 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             compressed_buffer = BytesIO()
             audio_seg.export(compressed_buffer, format="mp3", bitrate=bitrate)
             compressed_buffer.seek(0)
-            logger.info(f"Tried bitrate {bitrate}: New size = {new_size / (1024*1024):.2f} MB")
 
             new_size = compressed_buffer.getbuffer().nbytes 
+            logger.info(f"Tried bitrate {bitrate}: New size = {new_size / (1024*1024):.2f} MB")
 
             if new_size < 45 * 1024 * 1024:
                 audio_bytes = compressed_buffer
