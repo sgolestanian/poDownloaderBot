@@ -36,6 +36,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+
 BALE_BASE_URL = "https://tapi.bale.ai/"
 
 
@@ -192,7 +201,11 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             await stat_msg.delete()
             return
         except Exception as e:
-            print(e)
+            logger.exception(
+                "Failed to parse RSS | user_id=%s | error=%s",
+                update.effective_user.id,
+                e
+            )
 
 
 async def podcast_preview_message(ind, podcast, update):
