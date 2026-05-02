@@ -191,7 +191,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
     bitrates = ["128k", "96k", "64k", "48k", "32k"]
 
     logger.info(f"File size ({file_size / (1024*1024):.2f} MB)")
-    if file_size >= 45 * 1024 * 1024:
+    if file_size >= 20 * 1024 * 1024:
         logger.info(f"File size too large ({file_size / (1024*1024):.2f} MB)")
         await stat_msg.edit_text("دانلود تمام شد. در حال فشرده سازی...")
 
@@ -205,7 +205,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             new_size = compressed_buffer.getbuffer().nbytes 
             logger.info(f"Tried bitrate {bitrate}: New size = {new_size / (1024*1024):.2f} MB")
 
-            if new_size < 45 * 1024 * 1024:
+            if new_size < 20 * 1024 * 1024:
                 audio_bytes = compressed_buffer
                 break
     
@@ -222,7 +222,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             return
         except error.NetworkError:
             logger.exception(
-                f"Request entity too large ({audio_bytes.getbuffer().nbytes / 1024 * 1024:.2f})"
+                f"Request entity too large ({audio_bytes.getbuffer().nbytes / (1024 * 1024):.2f})"
             )
         except Exception as e:
             logger.exception(
