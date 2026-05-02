@@ -247,7 +247,7 @@ async def user_podcasts_list(update : Update, context : ContextTypes.DEFAULT_TYP
         await update.message.reply_text("شما هیچ پادکستی ندارید. برای اضافه کردن پادکست روی `پادکست جدید ➕ ` کلیک کنید.", reply_markup=keyboard)
 
     else:
-        update.message.reply_text("لیست پادکست‌های شما:.", reply_markup=keyboard)
+        await update.message.reply_text("لیست پادکست‌های شما:.", reply_markup=keyboard)
         for ind, podcast in enumerate(podcasts):
             await podcast_preview_message(ind, podcast, update)
 
