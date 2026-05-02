@@ -220,6 +220,10 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             )
             await stat_msg.delete()
             return
+        except error.NetworkError:
+            logger.exception(
+                f"Request entity too large ({audio_bytes.getbuffer().nbytes / 1024 * 1024:.2f})"
+            )
         except Exception as e:
             logger.exception(
                 "Failed to parse RSS | user_id=%s | error=%s",
