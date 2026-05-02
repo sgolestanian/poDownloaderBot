@@ -254,7 +254,16 @@ async def start_cmd(update : Update, context : ContextTypes.DEFAULT_TYPE):
 
 
 if __name__=="__main__":
-    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).base_url(BALE_BASE_URL).build()
+    app = (
+        ApplicationBuilder()
+        .token(os.getenv("BOT_TOKEN"))
+        .base_url(BALE_BASE_URL)
+        .connect_timeout(120)  # افزایش تایم اوت اتصال
+        .read_timeout(120)     # افزایش تایم اوت خواندن
+        .write_timeout(120)    # افزایش تایم اوت نوشتن
+        .pool_timeout(120)
+        .build()
+    )
     app.add_handler(CommandHandler('start', start_cmd))
 
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & filters.Regex("^پادکست‌های من$"), callback=user_podcasts_list))
