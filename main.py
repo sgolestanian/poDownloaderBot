@@ -173,7 +173,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
     
     audio_bytes.seek(0)
     audio_bytes.name = filename
-    await stat_msg.edit_text("دانلود تمام شد. در حال ارسال اپیزود.")
+    await stat_msg.edit_text("دانلود تمام شد. در حال فشرده سازی....")
     audio_bytes = AudioSegment.from_file(audio_bytes, format="mp3")
 
     compressed_buffer = BytesIO()
@@ -182,11 +182,17 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
     compressed_buffer.seek(0)
     compressed_buffer.name = filename
 
-    await query.message.reply_audio(
-        audio=compressed_buffer,
-        caption="✅ پادکست دانلود شد",
-    )
-    await stat_msg.delete()
+    for i in range(3):
+        await stat_msg.edit_text(f"در حال بارگذاری (تلاش {i} از 3)....")
+        try:
+            await query.message.reply_audio(
+                audio=compressed_buffer,
+                caption="✅ پادکست دانلود شد",
+            )
+            await stat_msg.delete()
+            return
+        except Exception as e:
+            print(e)
 
 
 async def podcast_preview_message(ind, podcast, update):
@@ -241,6 +247,7 @@ async def user_podcasts_list(update : Update, context : ContextTypes.DEFAULT_TYP
         await update.message.reply_text("شما هیچ پادکستی ندارید. برای اضافه کردن پادکست روی `پادکست جدید ➕ ` کلیک کنید.", reply_markup=keyboard)
 
     else:
+        update.message.reply_text("لیست پادکست‌های شما:.", reply_markup=keyboard)
         for ind, podcast in enumerate(podcasts):
             await podcast_preview_message(ind, podcast, update)
 
