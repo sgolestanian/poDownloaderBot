@@ -178,24 +178,43 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
         audio_bytes.write(chunk)
         downloaded_size += 1024*1024
         await stat_msg.edit_text(f"در حال دانلود اپیزود. ({downloaded_size}/{total_size})")
-
-    
+  
     audio_bytes.seek(0)
     audio_bytes.name = filename
-    await stat_msg.edit_text("دانلود تمام شد. در حال فشرده سازی....")
-    audio_bytes = AudioSegment.from_file(audio_bytes, format="mp3")
 
-    compressed_buffer = BytesIO()
-    audio_bytes.export(compressed_buffer, format="mp3", bitrate="64k") 
+    await stat_msg.edit_text("دانلود تمام شد...")
 
-    compressed_buffer.seek(0)
-    compressed_buffer.name = filename
+
+    file_size = audio_bytes.getBuffer().nbytes
+
+    audio_seg = AudioSegment.from_file(audio_bytes, format="mp3")
+    bitrates = ["128k", "96k", "64k", "48k", "32k"]
+
+    if file_size >= 50 * 1024 * 1024:
+        logger.info(f"File size too large ({file_size / (1024*1024):.2f} MB)")
+        await stat_msg.edit_text("دانلود تمام شد. در حال فشرده سازی...")
+
+        for bitrate in bitrates:
+            audio_bytes.seek(0)
+
+            compressed_buffer = BytesIO()
+            audio_bytes.export(compressed_buffer, format="mp3", bitrate=bitrate)
+            compressed_buffer.seek(0)
+            logger.info(f"Tried bitrate {bitrate}: New size = {new_size / (1024*1024):.2f} MB")
+
+            new_size = compressed_buffer.getbuffer().nbytes 
+
+            if new_size < 50 * 1024 * 1024:
+                audio_bytes = compressed_buffer
+                break
+    
+    audio_bytes.name = filename
 
     for i in range(3):
         await stat_msg.edit_text(f"در حال بارگذاری (تلاش {i} از 3)....")
         try:
             await query.message.reply_audio(
-                audio=compressed_buffer,
+                audio=audio_bytes,
                 caption="✅ پادکست دانلود شد",
             )
             await stat_msg.delete()
