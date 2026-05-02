@@ -190,6 +190,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
     audio_seg = AudioSegment.from_file(audio_bytes, format="mp3")
     bitrates = ["128k", "96k", "64k", "48k", "32k"]
 
+    logger.info(f"File size ({file_size / (1024*1024):.2f} MB)")
     if file_size >= 50 * 1024 * 1024:
         logger.info(f"File size too large ({file_size / (1024*1024):.2f} MB)")
         await stat_msg.edit_text("دانلود تمام شد. در حال فشرده سازی...")
