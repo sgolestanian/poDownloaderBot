@@ -185,7 +185,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
     await stat_msg.edit_text("دانلود تمام شد...")
 
 
-    file_size = audio_bytes.getBuffer().nbytes
+    file_size = audio_bytes.getbuffer().nbytes
 
     audio_seg = AudioSegment.from_file(audio_bytes, format="mp3")
     bitrates = ["128k", "96k", "64k", "48k", "32k"]
