@@ -5,7 +5,8 @@ import requests
 import os
 import re
 from urllib.parse import urlparse
-from pydub import AudioSegment
+import subprocess
+import tempfile
 
 from io import BytesIO
 
@@ -56,6 +57,36 @@ async def new_podcast_request_feed(update : Update, context : ContextTypes.DEFAU
 
 def get_podcast_key(rss_url):
     return rss_url.strip().lower()
+
+
+async def compress_audio_ffmpeg(input_path, target_bitrate="96k"):
+    """فشرده‌سازی با ffmpeg - مصرف RAM ثابت"""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            output_path = tmp.name
+        
+        cmd = [
+            "ffmpeg", "-i", input_path,
+            "-b:a", target_bitrate,
+            "-y", "-loglevel", "error",
+            output_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, timeout=300)
+        
+        if result.returncode == 0:
+            return output_path, os.path.getsize(output_path)
+        else:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            logger.error(f"ffmpeg failed: {result.stderr.decode()}")
+            return None, 0
+            
+    except Exception as e:
+        logger.exception(f"Compression failed: {e}")
+        if 'output_path' in locals() and os.path.exists(output_path):
+            os.unlink(output_path)
+        return None, 0
 
 
 async def new_podcast_add(update : Update, context : ContextTypes.DEFAULT_TYPE):
@@ -208,6 +239,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
                 return
             except error.BadRequest as e:
                 logger.warning(f"file_id invalid or expired: {e}")
+                downloaded_episodes[ep_itunes_episode].pop("file_id", None)
             except error.NetworkError as e:
                 logger.warning(f"Network error when sending with file_id: {e}")
             except Exception as e:
@@ -251,52 +283,53 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
         resp.raise_for_status()
         total_size = int(resp.headers.get("Content-Length", 0))
         
+        # ذخیره موقت روی دیسک
+        os.makedirs("downloads/temp", exist_ok=True)
+        temp_path = os.path.join("downloads/temp", f"temp_{filename}")
+        
         downloaded_size = 0
-        audio_bytes = BytesIO()
         last_update = 0
         
-        for chunk in resp.iter_content(chunk_size=1024*1024):
-            audio_bytes.write(chunk)
-            downloaded_size += len(chunk)
-            
-            # به‌روزرسانی پیام هر 5 مگابایت
-            if downloaded_size - last_update >= 5 * 1024 * 1024:
-                await stat_msg.edit_text(
-                    f"در حال دانلود اپیزود... ({downloaded_size / (1024*1024):.1f}/{total_size / (1024*1024):.1f} MB)"
-                )
-                last_update = downloaded_size
+        with open(temp_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024*1024):
+                f.write(chunk)
+                downloaded_size += len(chunk)
+                
+                # به‌روزرسانی پیام هر 5 مگابایت
+                if downloaded_size - last_update >= 5 * 1024 * 1024:
+                    await stat_msg.edit_text(
+                        f"در حال دانلود اپیزود... ({downloaded_size / (1024*1024):.1f}/{total_size / (1024*1024):.1f} MB)"
+                    )
+                    last_update = downloaded_size
       
-        audio_bytes.seek(0)
-        audio_bytes.name = filename
         await stat_msg.edit_text("دانلود تمام شد...")
 
-        file_size = audio_bytes.getbuffer().nbytes
+        file_size = os.path.getsize(temp_path)
         logger.info(f"Downloaded file size: {file_size / (1024*1024):.2f} MB")
 
         # فشرده‌سازی در صورت نیاز
+        final_path = temp_path
         if file_size >= 20 * 1024 * 1024:
-            logger.info(f"File too large, compressing...")
+            logger.info(f"File too large, compressing with ffmpeg...")
             await stat_msg.edit_text("در حال فشرده‌سازی...")
 
-            audio_seg = AudioSegment.from_file(audio_bytes, format="mp3")
-            bitrates = ["128k", "96k", "64k", "48k", "32k"]
+            bitrates = ["128k", "96k", "64k", "48k"]
+            compressed = False
 
             for bitrate in bitrates:
-                audio_bytes.seek(0)
-                compressed_buffer = BytesIO()
-                audio_seg.export(compressed_buffer, format="mp3", bitrate=bitrate)
-                compressed_buffer.seek(0)
-
-                new_size = compressed_buffer.getbuffer().nbytes 
-                logger.info(f"Bitrate {bitrate}: {new_size / (1024*1024):.2f} MB")
-
-                if new_size < 20 * 1024 * 1024:
-                    audio_bytes = compressed_buffer
-                    audio_bytes.name = filename
+                compressed_path, new_size = await compress_audio_ffmpeg(temp_path, bitrate)
+                
+                if compressed_path and new_size < 20 * 1024 * 1024:
+                    final_path = compressed_path
                     file_size = new_size
+                    compressed = True
+                    logger.info(f"Compressed to {bitrate}: {new_size / (1024*1024):.2f} MB")
                     break
+                elif compressed_path:
+                    os.unlink(compressed_path)
             
-            if file_size >= 20 * 1024 * 1024:
+            if not compressed:
+                os.unlink(temp_path)
                 await stat_msg.edit_text("❌ فایل بعد از فشرده‌سازی هنوز بزرگ است")
                 return
         
@@ -304,9 +337,13 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
         os.makedirs("downloads", exist_ok=True)
         cache_file_path = os.path.join("downloads", filename)
         
-        audio_bytes.seek(0)
-        with open(cache_file_path, "wb") as f:
-            f.write(audio_bytes.read())
+        if final_path != cache_file_path:
+            os.rename(final_path, cache_file_path)
+            if final_path == temp_path and os.path.exists(temp_path):
+                pass  # فایل قبلا rename شده
+            elif os.path.exists(temp_path):
+                os.unlink(temp_path)
+        
         logger.info(f"Saved to cache: {cache_file_path}")
 
         if 'downloaded_episodes' not in context.bot_data['all_podcasts'][pod_key]:
@@ -319,21 +356,18 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
         }
 
         # ارسال فایل
-        audio_bytes.seek(0)
         for attempt in range(3):
             await stat_msg.edit_text(f"در حال بارگذاری (تلاش {attempt + 1} از 3)...")
             try:
-                sent_msg = await query.message.reply_audio(
-                    audio=audio_bytes,
-                    caption=f"✅ {ep_title}",
-                )
+                with open(cache_file_path, "rb") as f:
+                    sent_msg = await query.message.reply_audio(
+                        audio=f,
+                        caption=f"✅ {ep_title}",
+                    )
                 
-                # ذخیره file_id و مسیر فایل
+                # ذخیره file_id
                 new_file_id = sent_msg.audio.file_id
-                
-                context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'][ep_itunes_episode] = {
-                    "file_id": new_file_id
-                }
+                context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'][ep_itunes_episode]["file_id"] = new_file_id
                 
                 logger.info(f"Successfully uploaded and saved file_id: {new_file_id}")
                 await stat_msg.delete()
@@ -343,12 +377,10 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
                 logger.warning(f"Network error on attempt {attempt + 1}: {e}")
                 if attempt < 2:
                     await asyncio.sleep(2)
-                    audio_bytes.seek(0)
             except Exception as e:
                 logger.exception(f"Upload failed on attempt {attempt + 1}: {e}")
                 if attempt < 2:
                     await asyncio.sleep(2)
-                    audio_bytes.seek(0)
         
         await stat_msg.edit_text("❌ خطا در بارگذاری فایل بعد از 3 تلاش")
         
@@ -358,6 +390,13 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
     except Exception as e:
         logger.exception(f"Unexpected error: {e}")
         await stat_msg.edit_text("❌ خطای غیرمنتظره")
+    finally:
+        # پاکسازی فایل‌های موقت
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
 
 
 async def podcast_preview_message(ind, podcast, update):
@@ -430,9 +469,9 @@ if __name__=="__main__":
         ApplicationBuilder()
         .token(os.getenv("BOT_TOKEN"))
         .base_url(BALE_BASE_URL)
-        .connect_timeout(120)  # افزایش تایم اوت اتصال
-        .read_timeout(120)     # افزایش تایم اوت خواندن
-        .write_timeout(120)    # افزایش تایم اوت نوشتن
+        .connect_timeout(120)
+        .read_timeout(120)
+        .write_timeout(120)
         .pool_timeout(120)
         .build()
     )
@@ -453,5 +492,3 @@ if __name__=="__main__":
     app.add_handler(CallbackQueryHandler(callback=listen_podcast_episode, pattern=r"^listenPodcastEpisode_(\d+)_(last|\d+)$"))
     app.add_handler(add_podcast_conv)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
