@@ -319,6 +319,8 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             for bitrate in bitrates:
                 await stat_msg.edit_text(f"در حال فشرده‌سازی (bitrate:{bitrate})...")
                 compressed_path, new_size = await compress_audio_ffmpeg(temp_path, bitrate)
+
+                logger.info(f"Compressed file : {compressed_path} ({new_size / (1024*1024):.2f} MB)")
                 
                 if compressed_path and new_size < 20 * 1024 * 1024:
                     final_path = compressed_path
@@ -328,8 +330,6 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
                     break
                 elif compressed_path:
                     os.unlink(compressed_path)
-
-                logger.info(f"Still too large ({file_size / (1024*1024):.2f}), compressing with ffmpeg...")
             
             if not compressed:
                 os.unlink(temp_path)
