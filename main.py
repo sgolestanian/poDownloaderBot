@@ -32,6 +32,7 @@ from telegram.ext import (
     PicklePersistence
     )
 
+import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -51,6 +52,10 @@ BALE_BASE_URL = "https://tapi.bale.ai/"
 async def new_podcast_request_feed(update : Update, context : ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("لطفا RSS feed پادکست خود را وارد کنید:")
     return 'GET_RSS_ADD'
+
+
+def get_podcast_key(rss_url):
+    return rss_url.strip().lower()
 
 
 async def new_podcast_add(update : Update, context : ContextTypes.DEFAULT_TYPE):
@@ -124,8 +129,21 @@ async def cancel_add_podcast(update : Update, context : ContextTypes.DEFAULT_TYP
 async def add_new_podcast(update : Update, context : ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_podcasts_list = context.user_data.get("podcasts_list", [])
+    
     new_podcast_prof = context.user_data.get("new_podcast_prof")
+    podcast_key = get_podcast_key(new_podcast_prof['rss_url'])
+    
+    # اضافه کردن به bot_data اگر وجود نداشته باشد
+    if "all_podcasts" not in context.bot_data:
+        context.bot_data["all_podcasts"] = {}
+    
+    if podcast_key not in context.bot_data["all_podcasts"]:
+        context.bot_data["all_podcasts"][podcast_key] = new_podcast_prof
+        (context.bot_data["all_podcasts"][podcast_key]).update({'downloaded_episodes':{}})
+        logger.info(f"Added new podcast to bot_data: {new_podcast_prof['title']}")
+    
+    # اضافه کردن به لیست کاربر
+    user_podcasts_list = context.user_data.get("podcasts_list", [])
     user_podcasts_list.append(new_podcast_prof)
     context.user_data["podcasts_list"] = user_podcasts_list
     context.user_data.update({"new_podcast_prof": []})
@@ -158,78 +176,183 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
         await query.message.reply_text(f"RSS در دسترس نیست.")
         return
     
-    if ep == 'last':
-        ep_entry = podcast_feed.entries[0]
-    print(f"Downloading episode:{ep}")
-    ep_mp3_url = ep_entry.enclosures[0].href
+    pod_key = get_podcast_key(context.user_data.get("podcasts_list")[ind]['rss_url'])
+    podcast_data = context.bot_data['all_podcasts'].get(pod_key, {})
 
+    downloaded_episodes = podcast_data.get('downloaded_episodes', {})
+
+    entry_idx = 0
+    if ep == 'last':
+        entry_idx = 0
+    else:
+        entry_idx = int(ep)
+    
+    ep_entry = podcast_feed.entries[entry_idx]
+    ep_itunes_episode = ep_entry.get('itunes_episode', f"ep_{entry_idx}")
+    ep_title = ep_entry.title
+
+    # مرحله 1: بررسی file_id
+    if ep_itunes_episode in downloaded_episodes:
+        logger.info(f"Episode {ep_itunes_episode} found in cache")
+        downloaded_episode_data = downloaded_episodes[ep_itunes_episode]
+
+        fid = downloaded_episode_data.get("file_id")
+        if fid:
+            try:
+                logger.info(f"Attempting to send using file_id: {fid}")
+                sent_msg = await query.message.reply_audio(
+                    audio=fid,
+                    caption=f"✅ {ep_title}",
+                )
+                logger.info(f"Successfully sent episode using file_id")
+                return
+            except error.BadRequest as e:
+                logger.warning(f"file_id invalid or expired: {e}")
+            except error.NetworkError as e:
+                logger.warning(f"Network error when sending with file_id: {e}")
+            except Exception as e:
+                logger.exception(f"Failed to send with file_id: {e}")
+    
+        # مرحله 2: بررسی فایل کش شده
+        downloaded_episode_file_path = downloaded_episode_data.get("file_path")
+        if downloaded_episode_file_path and os.path.exists(downloaded_episode_file_path):
+            try:
+                logger.info(f"Attempting to send cached file: {downloaded_episode_file_path}")
+                with open(downloaded_episode_file_path, "rb") as f:
+                    sent_msg = await query.message.reply_audio(
+                        audio=f,
+                        caption=f"✅ {ep_title}",
+                    )
+                
+                # ذخیره file_id جدید
+                new_file_id = sent_msg.audio.file_id
+                downloaded_episodes[ep_itunes_episode]["file_id"] = new_file_id
+                context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'] = downloaded_episodes
+                logger.info(f"Sent cached file and saved new file_id: {new_file_id}")
+                return
+            except error.NetworkError as e:
+                logger.warning(f"Network error when sending cached file: {e}")
+            except Exception as e:
+                logger.exception(f"Failed to send cached file: {e}")
+    
+    # مرحله 3: دانلود جدید
+    logger.info(f"Downloading episode: {ep_itunes_episode}")
+    ep_mp3_url = ep_entry.enclosures[0].href
+    
     path = urlparse(ep_mp3_url).path
     filename = os.path.basename(path)
+    if not filename.endswith('.mp3'):
+        filename = f"{ep_itunes_episode}.mp3"
     
-    stat_msg = await query.message.reply_text("در حال دانلود اپیزود")
-    resp = requests.get(ep_mp3_url, stream=True, timeout=30)
-    resp.raise_for_status()
-    total_size = int(resp.headers.get("Content-Length", 0))
-    await stat_msg.edit_text(f"در حال دانلود اپیزود. (0/{total_size})")
-
-    downloaded_size = 0
-    audio_bytes = BytesIO()
-    for chunk in resp.iter_content(chunk_size=1024*1024):
-        audio_bytes.write(chunk)
-        downloaded_size += 1024*1024
-        await stat_msg.edit_text(f"در حال دانلود اپیزود. ({downloaded_size}/{total_size})")
-  
-    audio_bytes.seek(0)
-    audio_bytes.name = filename
-
-    await stat_msg.edit_text("دانلود تمام شد...")
-
-
-    file_size = audio_bytes.getbuffer().nbytes
-
-    audio_seg = AudioSegment.from_file(audio_bytes, format="mp3")
-    bitrates = ["128k", "96k", "64k", "48k", "32k"]
-
-    logger.info(f"File size ({file_size / (1024*1024):.2f} MB)")
-    if file_size >= 20 * 1024 * 1024:
-        logger.info(f"File size too large ({file_size / (1024*1024):.2f} MB)")
-        await stat_msg.edit_text("دانلود تمام شد. در حال فشرده سازی...")
-
-        for bitrate in bitrates:
-            audio_bytes.seek(0)
-
-            compressed_buffer = BytesIO()
-            audio_seg.export(compressed_buffer, format="mp3", bitrate=bitrate)
-            compressed_buffer.seek(0)
-
-            new_size = compressed_buffer.getbuffer().nbytes 
-            logger.info(f"Tried bitrate {bitrate}: New size = {new_size / (1024*1024):.2f} MB")
-
-            if new_size < 20 * 1024 * 1024:
-                audio_bytes = compressed_buffer
-                break
+    stat_msg = await query.message.reply_text("در حال دانلود اپیزود...")
     
-    audio_bytes.name = filename
+    try:
+        resp = requests.get(ep_mp3_url, stream=True, timeout=30)
+        resp.raise_for_status()
+        total_size = int(resp.headers.get("Content-Length", 0))
+        
+        downloaded_size = 0
+        audio_bytes = BytesIO()
+        last_update = 0
+        
+        for chunk in resp.iter_content(chunk_size=1024*1024):
+            audio_bytes.write(chunk)
+            downloaded_size += len(chunk)
+            
+            # به‌روزرسانی پیام هر 5 مگابایت
+            if downloaded_size - last_update >= 5 * 1024 * 1024:
+                await stat_msg.edit_text(
+                    f"در حال دانلود اپیزود... ({downloaded_size / (1024*1024):.1f}/{total_size / (1024*1024):.1f} MB)"
+                )
+                last_update = downloaded_size
+      
+        audio_bytes.seek(0)
+        audio_bytes.name = filename
+        await stat_msg.edit_text("دانلود تمام شد...")
 
-    for i in range(3):
-        await stat_msg.edit_text(f"در حال بارگذاری (تلاش {i} از 3)....")
-        try:
-            await query.message.reply_audio(
-                audio=audio_bytes,
-                caption="✅ پادکست دانلود شد",
-            )
-            await stat_msg.delete()
-            return
-        except error.NetworkError:
-            logger.exception(
-                f"Request entity too large ({audio_bytes.getbuffer().nbytes / (1024 * 1024):.2f})"
-            )
-        except Exception as e:
-            logger.exception(
-                "Failed to parse RSS | user_id=%s | error=%s",
-                update.effective_user.id,
-                e
-            )
+        file_size = audio_bytes.getbuffer().nbytes
+        logger.info(f"Downloaded file size: {file_size / (1024*1024):.2f} MB")
+
+        # فشرده‌سازی در صورت نیاز
+        if file_size >= 20 * 1024 * 1024:
+            logger.info(f"File too large, compressing...")
+            await stat_msg.edit_text("در حال فشرده‌سازی...")
+
+            audio_seg = AudioSegment.from_file(audio_bytes, format="mp3")
+            bitrates = ["128k", "96k", "64k", "48k", "32k"]
+
+            for bitrate in bitrates:
+                audio_bytes.seek(0)
+                compressed_buffer = BytesIO()
+                audio_seg.export(compressed_buffer, format="mp3", bitrate=bitrate)
+                compressed_buffer.seek(0)
+
+                new_size = compressed_buffer.getbuffer().nbytes 
+                logger.info(f"Bitrate {bitrate}: {new_size / (1024*1024):.2f} MB")
+
+                if new_size < 20 * 1024 * 1024:
+                    audio_bytes = compressed_buffer
+                    audio_bytes.name = filename
+                    file_size = new_size
+                    break
+            
+            if file_size >= 20 * 1024 * 1024:
+                await stat_msg.edit_text("❌ فایل بعد از فشرده‌سازی هنوز بزرگ است")
+                return
+        
+        # ذخیره فایل در کش
+        os.makedirs("downloads", exist_ok=True)
+        cache_file_path = os.path.join("downloads", filename)
+        
+        audio_bytes.seek(0)
+        with open(cache_file_path, "wb") as f:
+            f.write(audio_bytes.read())
+        logger.info(f"Saved to cache: {cache_file_path}")
+
+        # ارسال فایل
+        audio_bytes.seek(0)
+        for attempt in range(3):
+            await stat_msg.edit_text(f"در حال بارگذاری (تلاش {attempt + 1} از 3)...")
+            try:
+                sent_msg = await query.message.reply_audio(
+                    audio=audio_bytes,
+                    caption=f"✅ {ep_title}",
+                )
+                
+                # ذخیره file_id و مسیر فایل
+                new_file_id = sent_msg.audio.file_id
+                if 'downloaded_episodes' not in context.bot_data['all_podcasts'][pod_key]:
+                    context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'] = {}
+                
+                context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'][ep_itunes_episode] = {
+                    "file_id": new_file_id,
+                    "file_path": cache_file_path,
+                    "title": ep_title
+                }
+                
+                logger.info(f"Successfully uploaded and saved file_id: {new_file_id}")
+                await stat_msg.delete()
+                return
+                
+            except error.NetworkError as e:
+                logger.warning(f"Network error on attempt {attempt + 1}: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                    audio_bytes.seek(0)
+            except Exception as e:
+                logger.exception(f"Upload failed on attempt {attempt + 1}: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                    audio_bytes.seek(0)
+        
+        await stat_msg.edit_text("❌ خطا در بارگذاری فایل بعد از 3 تلاش")
+        
+    except requests.RequestException as e:
+        logger.exception(f"Download failed: {e}")
+        await stat_msg.edit_text("❌ خطا در دانلود فایل")
+    except Exception as e:
+        logger.exception(f"Unexpected error: {e}")
+        await stat_msg.edit_text("❌ خطای غیرمنتظره")
 
 
 async def podcast_preview_message(ind, podcast, update):
