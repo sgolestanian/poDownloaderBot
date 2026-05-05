@@ -309,6 +309,15 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             f.write(audio_bytes.read())
         logger.info(f"Saved to cache: {cache_file_path}")
 
+        if 'downloaded_episodes' not in context.bot_data['all_podcasts'][pod_key]:
+            context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'] = {}
+        
+        context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'][ep_itunes_episode] = {
+            "file_id": None,
+            "file_path": cache_file_path,
+            "title": ep_title
+        }
+
         # ارسال فایل
         audio_bytes.seek(0)
         for attempt in range(3):
@@ -321,13 +330,9 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
                 
                 # ذخیره file_id و مسیر فایل
                 new_file_id = sent_msg.audio.file_id
-                if 'downloaded_episodes' not in context.bot_data['all_podcasts'][pod_key]:
-                    context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'] = {}
                 
                 context.bot_data['all_podcasts'][pod_key]['downloaded_episodes'][ep_itunes_episode] = {
-                    "file_id": new_file_id,
-                    "file_path": cache_file_path,
-                    "title": ep_title
+                    "file_id": new_file_id
                 }
                 
                 logger.info(f"Successfully uploaded and saved file_id: {new_file_id}")
