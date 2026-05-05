@@ -313,7 +313,7 @@ async def listen_podcast_episode(update : Update, context : ContextTypes.DEFAULT
             logger.info(f"File too large, compressing with ffmpeg...")
             await stat_msg.edit_text("در حال فشرده‌سازی...")
 
-            bitrates = ["128k", "96k", "64k", "48k"]
+            bitrates = ["128k", "64k", "32k", "16k"]
             compressed = False
 
             for bitrate in bitrates:
